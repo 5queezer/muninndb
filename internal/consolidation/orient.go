@@ -69,7 +69,9 @@ func (w *Worker) runPhase0Orient(ctx context.Context, store *storage.PebbleStore
 	return summary, nil
 }
 
-// isLegalVault returns true if the vault name indicates it contains legal content.
+// isLegalVault returns true if the vault is the "legal" vault or uses the legal prefix convention.
+// Matches: "legal", "legal:contracts", "legal/docs" — but NOT "paralegal" or "illegal".
 func isLegalVault(vault string) bool {
-	return strings.Contains(strings.ToLower(vault), "legal")
+	v := strings.ToLower(vault)
+	return v == "legal" || strings.HasPrefix(v, "legal:") || strings.HasPrefix(v, "legal/")
 }

@@ -219,6 +219,90 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 	}
 }
 
+func TestRunOnce_SmallVault_SkipsDedup(t *testing.T) {
+	store, db, cleanup := testStoreWithDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	vault := "runonce-small-vault"
+	wsPrefix := store.ResolveVaultPrefix(vault)
+
+	dupAID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "dup-a", Content: "France's capital is Paris.", Confidence: 0.9, Relevance: 0.8,
+		Stability: 30, Embedding: unitEmbedding(9, 0),
+	})
+	dupBID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "dup-b", Content: "Paris is the capital of France.", Confidence: 0.5, Relevance: 0.5,
+		Stability: 20, Embedding: nearEmbedding(9, 0, 1, 0.97),
+	})
+	writeUniqueEngrams(t, ctx, store, db, wsPrefix, 7, 9, 2)
+
+	w := NewWorker(&mockEngineInterface{store: store})
+	report, err := w.RunOnce(ctx, vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := report.MergedEngrams; got != 0 {
+		t.Fatalf("MergedEngrams = %d, want 0 when RunOnce guard skips small vaults", got)
+	}
+
+	for _, id := range []storage.ULID{dupAID, dupBID} {
+		eng, err := store.GetEngram(ctx, wsPrefix, id)
+		if err != nil {
+			t.Fatalf("GetEngram(%v): %v", id, err)
+		}
+		if eng.State == storage.StateArchived {
+			t.Fatalf("engram %v was archived even though RunOnce should skip dream dedup for small vaults", id)
+		}
+	}
+}
+
+func TestRunOnce_SufficientVault_RunsDedup(t *testing.T) {
+	store, db, cleanup := testStoreWithDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	vault := "runonce-large-vault"
+	wsPrefix := store.ResolveVaultPrefix(vault)
+
+	repID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "rep", Content: "France's capital is Paris.", Confidence: 0.9, Relevance: 0.85,
+		Stability: 30, Embedding: unitEmbedding(20, 0),
+	})
+	memID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "member", Content: "Paris is the capital of France.", Confidence: 0.5, Relevance: 0.5,
+		Stability: 20, Embedding: nearEmbedding(20, 0, 1, 0.97),
+	})
+	writeUniqueEngrams(t, ctx, store, db, wsPrefix, 18, 20, 2)
+
+	w := NewWorker(&mockEngineInterface{store: store})
+	report, err := w.RunOnce(ctx, vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := report.MergedEngrams; got != 1 {
+		t.Fatalf("MergedEngrams = %d, want 1 once RunOnce reaches the minimum size", got)
+	}
+
+	rep, err := store.GetEngram(ctx, wsPrefix, repID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.State == storage.StateArchived {
+		t.Fatal("representative engram was archived")
+	}
+
+	mem, err := store.GetEngram(ctx, wsPrefix, memID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mem.State != storage.StateArchived {
+		t.Fatalf("member state = %v, want archived", mem.State)
+	}
+}
+
 // TestWorker_SchedulerStopsOnContextCancel verifies that Start() returns promptly
 // after its context is cancelled, and that RunOnce was invoked at least twice
 // during the observation window.

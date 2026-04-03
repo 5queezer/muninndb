@@ -23,23 +23,39 @@ type EngineInterface interface {
 // Worker is the main consolidation worker that periodically runs a 5-phase
 // consolidation pipeline to reduce redundancy and strengthen associations.
 type Worker struct {
-	Engine         EngineInterface
-	Schedule       time.Duration // frequency of consolidation runs (default 6h)
-	MaxDedup       int           // max pairs to merge per run (default 100)
-	MaxTransitive  int           // max inferred edges per run (default 1000)
-	DryRun         bool          // if true, no mutations occur
-	DedupThreshold float32       // cosine similarity threshold for dedup (0 = use default 0.95)
+	Engine            EngineInterface
+	Schedule          time.Duration // frequency of consolidation runs (default 6h)
+	MaxDedup          int           // max pairs to merge per run (default 100)
+	MaxTransitive     int           // max inferred edges per run (default 1000)
+	DryRun            bool          // if true, no mutations occur
+	DedupThreshold    float32       // cosine similarity threshold for dedup (0 = use default 0.95)
+	MinDedupVaultSize int           // minimum active engrams required to run Phase 2 dedup (default 20)
 }
 
 // NewWorker creates a new consolidation worker with sensible defaults.
 func NewWorker(engine EngineInterface) *Worker {
 	return &Worker{
-		Engine:        engine,
-		Schedule:      6 * time.Hour,
-		MaxDedup:      100,
-		MaxTransitive: 1000,
-		DryRun:        false,
+		Engine:            engine,
+		Schedule:          6 * time.Hour,
+		MaxDedup:          100,
+		MaxTransitive:     1000,
+		DryRun:            false,
+		MinDedupVaultSize: 20,
 	}
+}
+
+func (w *Worker) effectiveMinDedupVaultSize() int {
+	if w.MinDedupVaultSize <= 0 {
+		return 20
+	}
+	return w.MinDedupVaultSize
+}
+
+func (w *Worker) shouldRunPhase2Dedup(summary *VaultSummary) (bool, int) {
+	if summary == nil {
+		return false, 0
+	}
+	return summary.WithEmbed >= w.effectiveMinDedupVaultSize(), summary.WithEmbed
 }
 
 // RunOnce executes a single consolidation pass on the specified vault.
@@ -61,7 +77,15 @@ func (w *Worker) RunOnce(ctx context.Context, vault string) (*ConsolidationRepor
 	}
 
 	// Phase 2: Semantic Deduplication
-	if err := w.runPhase2Dedup(ctx, store, wsPrefix, report, vault); err != nil {
+	summary, err := w.runPhase0Orient(ctx, store, wsPrefix, vault)
+	if err != nil {
+		slog.Warn("consolidation: phase 2 guard pre-scan failed", "vault", vault, "error", err)
+		report.Errors = append(report.Errors, "phase2_guard_orient: "+err.Error())
+	}
+	if ok, withEmbed := w.shouldRunPhase2Dedup(summary); !ok {
+		slog.Info("consolidation: skipping phase 2 dedup — vault below minimum size",
+			"vault", vault, "engrams_with_embed", withEmbed, "min", w.effectiveMinDedupVaultSize())
+	} else if err := w.runPhase2Dedup(ctx, store, wsPrefix, report, vault); err != nil {
 		slog.Warn("consolidation: phase 2 (dedup) failed", "vault", vault, "error", err)
 		report.Errors = append(report.Errors, "phase2_dedup: "+err.Error())
 	}

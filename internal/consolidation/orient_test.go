@@ -76,9 +76,11 @@ func TestIsLegalVault(t *testing.T) {
 	}{
 		{"legal", true},
 		{"Legal", true},
-		{"legal-docs", true},
-		{"my_legal", true},
+		{"legal:docs", true},
+		{"legal/docs", true},
 		{"LEGAL", true},
+		{"paralegal-notes", false},
+		{"illegal", false},
 		{"work", false},
 		{"default", false},
 		{"personal", false},

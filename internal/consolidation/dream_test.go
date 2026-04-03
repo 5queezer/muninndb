@@ -51,7 +51,7 @@ func TestDreamOnce_LegalVaultSkipped(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	vault := "legal-docs"
+	vault := "legal/docs"
 	wsPrefix := store.ResolveVaultPrefix(vault)
 
 	embed := []float32{1, 0, 0}
@@ -68,8 +68,8 @@ func TestDreamOnce_LegalVaultSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(report.Skipped) != 1 || report.Skipped[0] != "legal-docs" {
-		t.Errorf("expected legal-docs in Skipped, got %v", report.Skipped)
+	if len(report.Skipped) != 1 || report.Skipped[0] != vault {
+		t.Errorf("expected %s in Skipped, got %v", vault, report.Skipped)
 	}
 
 	if len(report.Reports) != 1 {
