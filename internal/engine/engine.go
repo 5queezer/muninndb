@@ -1095,11 +1095,15 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 
 	// Submit to episode worker for hippocampal episode segmentation.
 	if e.episodeWorker != nil && len(eng.Embedding) > 0 {
+		eventTime := eng.CreatedAt
+		if eventTime.IsZero() {
+			eventTime = time.Now()
+		}
 		e.episodeWorker.Submit(cognitive.EpisodeEvent{
 			WS:        wsPrefix,
 			EngramID:  [16]byte(id),
 			Embedding: eng.Embedding,
-			At:        eng.CreatedAt,
+			At:        eventTime,
 		})
 	}
 
@@ -1545,11 +1549,15 @@ func (e *Engine) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*m
 
 		// Submit to episode worker for hippocampal episode segmentation.
 		if e.episodeWorker != nil && len(p.eng.Embedding) > 0 {
+			eventTime := p.eng.CreatedAt
+			if eventTime.IsZero() {
+				eventTime = time.Now()
+			}
 			e.episodeWorker.Submit(cognitive.EpisodeEvent{
 				WS:        p.wsPrefix,
 				EngramID:  [16]byte(id),
 				Embedding: p.eng.Embedding,
-				At:        p.eng.CreatedAt,
+				At:        eventTime,
 			})
 		}
 

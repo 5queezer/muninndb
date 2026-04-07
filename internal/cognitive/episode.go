@@ -134,9 +134,10 @@ func (ew *EpisodeWorker) processVaultBatch(ctx context.Context, ws [8]byte, even
 			}
 		}
 
-		// Update state for next comparison.
+		// Update state for next comparison. Defensive copy of embedding
+		// since the slice may be reused after async Submit returns.
 		state.lastID = ev.EngramID
-		state.lastEmbedding = ev.Embedding
+		state.lastEmbedding = append([]float32(nil), ev.Embedding...)
 		state.lastAt = ev.At
 	}
 }
