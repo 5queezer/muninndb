@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	EpisodePassInterval = 5 * time.Second
+	episodePassInterval = 5 * time.Second
 	episodeBufSize      = 2000
 	episodeBatchSize    = 50
 )
@@ -56,7 +56,7 @@ func NewEpisodeWorker(store EpisodeStore, config EpisodeConfig) *EpisodeWorker {
 		config: config,
 	}
 	ew.Worker = NewWorker[EpisodeEvent](
-		episodeBufSize, episodeBatchSize, EpisodePassInterval,
+		episodeBufSize, episodeBatchSize, episodePassInterval,
 		ew.processBatch,
 	)
 	return ew
