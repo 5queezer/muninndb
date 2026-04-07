@@ -51,7 +51,7 @@ func (s *SeparationScorer) ScoreSeparation(ctx context.Context, ws [8]byte, quer
 	}
 
 	alpha := s.config.RepulsionAlpha
-	if alpha <= 0 || alpha >= 1 {
+	if alpha < 0 || alpha >= 1 {
 		alpha = 0.3
 	}
 

@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"github.com/scrypster/muninndb/internal/engine/activation"
-	"github.com/scrypster/muninndb/internal/storage"
 )
 
 const (
@@ -51,10 +50,22 @@ func (e *Engine) applySeparation(ctx context.Context, ws [8]byte, results []acti
 		return results
 	}
 
-	// Build candidate ID slice.
-	candidateIDs := make([][16]byte, len(results))
+	// Build seed ID set for filtering.
+	seedIDs := make(map[[16]byte]struct{}, seedCount)
+	for _, seed := range results[:seedCount] {
+		seedIDs[[16]byte(seed.Engram.ID)] = struct{}{}
+	}
+
+	// Build candidate ID slice, excluding seeds to avoid double entity lookup.
+	candidateIDs := make([][16]byte, 0, len(results)-seedCount)
+	candidateIdx := make([]int, 0, len(results)-seedCount) // maps back to results index
 	for i, r := range results {
-		candidateIDs[i] = [16]byte(r.Engram.ID)
+		rid := [16]byte(r.Engram.ID)
+		if _, isSeed := seedIDs[rid]; isSeed {
+			continue
+		}
+		candidateIDs = append(candidateIDs, rid)
+		candidateIdx = append(candidateIdx, i)
 	}
 
 	multipliers, err := e.separationScorer.ScoreSeparation(ctx, ws, queryEntities, candidateIDs)
@@ -63,18 +74,9 @@ func (e *Engine) applySeparation(ctx context.Context, ws [8]byte, results []acti
 		return results
 	}
 
-	// Apply multipliers. Skip seed results (first seedCount) — they define
-	// the query context and should not be penalised.
-	seedIDs := make(map[storage.ULID]struct{}, seedCount)
-	for _, seed := range results[:seedCount] {
-		seedIDs[seed.Engram.ID] = struct{}{}
-	}
-
-	for i := range results {
-		if _, isSeed := seedIDs[results[i].Engram.ID]; isSeed {
-			continue
-		}
-		results[i].Score *= multipliers[i]
+	// Apply multipliers only to non-seed candidates.
+	for j, ri := range candidateIdx {
+		results[ri].Score *= multipliers[j]
 	}
 
 	// Re-sort descending by score after separation adjustments.

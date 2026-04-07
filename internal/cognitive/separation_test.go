@@ -189,8 +189,8 @@ func TestSeparationDisabled(t *testing.T) {
 	}
 }
 
-// TestSeparationClampFloor verifies the 0.1 floor clamp when alpha is extreme.
-func TestSeparationClampFloor(t *testing.T) {
+// TestSeparationInvalidAlphaDefault verifies that out-of-range alpha defaults to 0.3.
+func TestSeparationInvalidAlphaDefault(t *testing.T) {
 	store := &mockSeparationStore{
 		entities: map[[16]byte][]string{
 			id(1): {}, // no entities → jaccard=0.0
@@ -211,5 +211,29 @@ func TestSeparationClampFloor(t *testing.T) {
 	// With alpha defaulted to 0.3: mult = 1.0 - 0.3*1.0 = 0.7
 	if math.Abs(mults[0]-0.7) > 1e-9 {
 		t.Errorf("clamped alpha multiplier = %f, want 0.7", mults[0])
+	}
+}
+
+// TestSeparationClampFloor verifies the 0.1 floor clamp with high alpha and zero overlap.
+func TestSeparationClampFloor(t *testing.T) {
+	store := &mockSeparationStore{
+		entities: map[[16]byte][]string{
+			id(1): {}, // no entities → jaccard=0.0
+		},
+	}
+
+	// alpha=0.99, jaccard=0.0 → raw mult = 1.0 - 0.99*(1.0-0.0) = 0.01, clamped to 0.1
+	scorer := NewSeparationScorer(store, SeparationConfig{
+		RepulsionAlpha:    0.99,
+		ContextMismatchFn: "entity",
+	})
+
+	mults, err := scorer.ScoreSeparation(context.Background(), [8]byte{}, []string{"auth"}, [][16]byte{id(1)})
+	if err != nil {
+		t.Fatalf("ScoreSeparation error: %v", err)
+	}
+
+	if math.Abs(mults[0]-0.1) > 1e-9 {
+		t.Errorf("floor clamp multiplier = %f, want 0.1", mults[0])
 	}
 }
