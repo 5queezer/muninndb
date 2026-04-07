@@ -110,6 +110,7 @@ type Engine struct {
 	hebbianWorker    *cognitive.HebbianWorker
 	contradictWorker *cognitive.Worker[cognitive.ContradictItem]
 	confidenceWorker *cognitive.Worker[cognitive.ConfidenceUpdate]
+	episodeWorker    *cognitive.EpisodeWorker
 	transitionWorker *cognitive.TransitionWorker
 	activity         *cognitive.ActivityTracker
 	embedder         activation.Embedder // optional embedder for embedding-based brief scoring
@@ -329,6 +330,7 @@ func NewEngine(cfg EngineConfig) *Engine {
 		hebbianWorker:    cfg.HebbianWorker,
 		contradictWorker: cfg.ContradictWorker,
 		confidenceWorker: cfg.ConfidenceWorker,
+		episodeWorker:    cfg.EpisodeWorker,
 		activity:         cognitive.NewActivityTracker(),
 		embedder:         cfg.Embedder,
 		autoAssoc:        autoassoc.New(stopCtx, store, cfg.FTSIndex),
@@ -1091,6 +1093,16 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		})
 	}
 
+	// Submit to episode worker for hippocampal episode segmentation.
+	if e.episodeWorker != nil && len(eng.Embedding) > 0 {
+		e.episodeWorker.Submit(cognitive.EpisodeEvent{
+			WS:        wsPrefix,
+			EngramID:  [16]byte(id),
+			Embedding: eng.Embedding,
+			At:        eng.CreatedAt,
+		})
+	}
+
 	e.engramCount.Add(1)
 
 	// Update coherence counters for the new engram (starts as an orphan).
@@ -1528,6 +1540,16 @@ func (e *Engine) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*m
 						cw.Submit(cognitive.ConfidenceUpdate{WS: wsPrefix, EngramID: ev.EngramB, Evidence: cognitive.EvidenceContradiction, Source: "contradiction_detected"})
 					}
 				},
+			})
+		}
+
+		// Submit to episode worker for hippocampal episode segmentation.
+		if e.episodeWorker != nil && len(p.eng.Embedding) > 0 {
+			e.episodeWorker.Submit(cognitive.EpisodeEvent{
+				WS:        p.wsPrefix,
+				EngramID:  [16]byte(id),
+				Embedding: p.eng.Embedding,
+				At:        p.eng.CreatedAt,
 			})
 		}
 
@@ -2418,6 +2440,13 @@ func (e *Engine) SetCognitiveWorkers(
 	e.cogMu.Unlock()
 }
 
+// SetEpisodeWorker sets the episode segmentation worker. Thread-safe.
+func (e *Engine) SetEpisodeWorker(ew *cognitive.EpisodeWorker) {
+	e.cogMu.Lock()
+	e.episodeWorker = ew
+	e.cogMu.Unlock()
+}
+
 // SetTransitionWorker sets the PAS transition worker. Thread-safe.
 func (e *Engine) SetTransitionWorker(tw *cognitive.TransitionWorker) {
 	e.cogMu.Lock()
@@ -2433,6 +2462,7 @@ func (e *Engine) ClearCognitiveWorkers() {
 	e.hebbianWorker = nil
 	e.contradictWorker = nil
 	e.confidenceWorker = nil
+	e.episodeWorker = nil
 	e.transitionWorker = nil
 	e.cogMu.Unlock()
 }
@@ -2459,6 +2489,12 @@ func (e *Engine) WorkerStats() cognitive.EngineWorkerStats {
 	}
 	if conf != nil {
 		stats.Confidence = conf.Stats()
+	}
+	e.cogMu.RLock()
+	ep := e.episodeWorker
+	e.cogMu.RUnlock()
+	if ep != nil {
+		stats.Episode = ep.Stats()
 	}
 	return stats
 }
@@ -2558,6 +2594,7 @@ func relTypeFromString(rel string) uint16 {
 		"belongs_to_project": storage.RelBelongsToProject, "references": storage.RelReferences,
 		"implements": storage.RelImplements, "blocks": storage.RelBlocks,
 		"resolves": storage.RelResolves, "refines": storage.RelRefines,
+		"same_episode": storage.RelSameEpisode,
 	}
 	if v, ok := m[rel]; ok {
 		return uint16(v)
