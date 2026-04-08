@@ -111,9 +111,16 @@ func buildScoringInputs(n, entitiesPerEngram int) (*mockSeparationStore, [][16]b
 
 // ---------------------------------------------------------------------------
 // Benchmark 3: Quality metrics — verify cross-context penalty effectiveness
+//
+// NOTE: This tests the scoring layer (multiplier values), not end-to-end
+// retrieval quality. The ratio assertions compare score multipliers produced
+// by the SeparationScorer, which is a different metric than the retrieval-level
+// avg(cross-context distance) / avg(within-context distance) described in
+// issue #19. A retrieval-level A/B test requires a full engine with embeddings
+// and is beyond unit-test scope.
 // ---------------------------------------------------------------------------
 
-func TestSeparationQualityMetrics(t *testing.T) {
+func TestSeparationScorerQualityMetrics(t *testing.T) {
 	// Two distinct entity clusters ("projects").
 	projectA := []string{"postgres", "redis", "auth-service"}
 	projectB := []string{"kafka", "spark", "data-pipeline"}
@@ -195,6 +202,9 @@ func TestSeparationQualityMetrics(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Benchmark 4: Alpha effect — separation ratio scales with alpha
+//
+// This tests the scorer multiplier ratio, not retrieval precision/recall.
+// End-to-end retrieval benchmarks require a live engine with embeddings.
 // ---------------------------------------------------------------------------
 
 func TestSeparationAlphaEffect(t *testing.T) {
