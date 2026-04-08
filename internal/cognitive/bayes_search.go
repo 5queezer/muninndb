@@ -7,14 +7,16 @@ import (
 	"time"
 )
 
-// FeatureVector represents a configuration of hippocampal features.
+// FeatureVector covers the primary feature toggles and key numeric knobs.
+// Additional parameters (episode window size, replay dampening, loci resolution,
+// separation context signals) can be added as the feature set stabilizes.
 type FeatureVector struct {
 	EpisodesEnabled     bool
 	SimilarityThreshold float64 // 0.1-0.5
 	ReplayEnabled       bool
 	ReplayInterval      time.Duration
 	SeparationEnabled   bool
-	SeparationAlpha     float64 // 0.0-0.9
+	SeparationAlpha     float64 // 0.05-0.30
 	LociEnabled         bool
 	CompletionEnabled   bool
 }
@@ -46,8 +48,8 @@ const numBuckets = 5
 // Bucket boundaries for SimilarityThreshold: [0.1, 0.2, 0.3, 0.4, 0.5].
 var thresholdBuckets = [numBuckets]float64{0.1, 0.2, 0.3, 0.4, 0.5}
 
-// Bucket boundaries for SeparationAlpha: [0.0, 0.225, 0.45, 0.675, 0.9].
-var alphaBuckets = [numBuckets]float64{0.0, 0.225, 0.45, 0.675, 0.9}
+// Bucket boundaries for SeparationAlpha: [0.05, 0.10, 0.15, 0.20, 0.30].
+var alphaBuckets = [numBuckets]float64{0.05, 0.10, 0.15, 0.20, 0.30}
 
 // Bucket boundaries for ReplayInterval: 1h, 3h, 6h, 12h, 24h.
 var intervalBuckets = [numBuckets]time.Duration{
@@ -133,8 +135,10 @@ func (bs *BayesianSearcher) bestBucket(arms []betaArm) int {
 
 // RecordResult records a benchmark result and updates the Thompson sampling arms.
 func (bs *BayesianSearcher) RecordResult(result BenchmarkResult) {
+	// Compute median before appending to avoid self-inclusion bias.
+	med := bs.medianScore()
 	bs.results = append(bs.results, result)
-	good := result.Score > bs.medianScore()
+	good := result.Score > med
 
 	// Update boolean arms.
 	bs.updateBoolArm(&bs.episodes, result.Config.EpisodesEnabled, good)
@@ -143,19 +147,25 @@ func (bs *BayesianSearcher) RecordResult(result BenchmarkResult) {
 	bs.updateBoolArm(&bs.loci, result.Config.LociEnabled, good)
 	bs.updateBoolArm(&bs.completion, result.Config.CompletionEnabled, good)
 
-	// Update continuous arms.
-	bs.updateContinuousArm(bs.thresholdArms[:], thresholdBuckets[:], result.Config.SimilarityThreshold, good)
-	bs.updateContinuousArm(bs.alphaArms[:], alphaBuckets[:], result.Config.SeparationAlpha, good)
+	// Update continuous arms only when their parent feature is enabled.
+	if result.Config.EpisodesEnabled {
+		bs.updateContinuousArm(bs.thresholdArms[:], thresholdBuckets[:], result.Config.SimilarityThreshold, good)
+	}
+	if result.Config.SeparationEnabled {
+		bs.updateContinuousArm(bs.alphaArms[:], alphaBuckets[:], result.Config.SeparationAlpha, good)
+	}
 
-	// For ReplayInterval, find the matching bucket.
-	for i, iv := range intervalBuckets {
-		if result.Config.ReplayInterval == iv {
-			if good {
-				bs.intervalArms[i].alpha++
-			} else {
-				bs.intervalArms[i].beta++
+	// For ReplayInterval, only update when replay is enabled.
+	if result.Config.ReplayEnabled {
+		for i, iv := range intervalBuckets {
+			if result.Config.ReplayInterval == iv {
+				if good {
+					bs.intervalArms[i].alpha++
+				} else {
+					bs.intervalArms[i].beta++
+				}
+				break
 			}
-			break
 		}
 	}
 }
