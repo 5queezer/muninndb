@@ -25,5 +25,4 @@ type EngineConfig struct {
 	Embedder         activation.Embedder                            // nil → no semantic search
 	HNSWRegistry     *hnsw.Registry                                 // nil → no HNSW indexes
 	HippocampalConfig *cognitive.HippocampalConfig                  // nil → hippocampal features disabled
-	ReplayWorker     *cognitive.ReplayWorker                        // nil → no hippocampal replay
 }

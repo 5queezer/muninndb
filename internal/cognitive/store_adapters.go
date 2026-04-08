@@ -149,7 +149,12 @@ func (a *replayStoreAdapter) ListVaults(_ context.Context) ([]string, error) {
 }
 
 func (a *replayStoreAdapter) RecentEngrams(ctx context.Context, vault string, limit int) ([]ReplayEngram, error) {
-	ws := a.store.VaultPrefix(vault)
+	ws := a.store.ResolveVaultPrefix(vault)
+	// TODO: RecentActive returns relevance-ranked engrams, not recency-ordered.
+	// This means replay strengthens already-strong memories rather than consolidating
+	// recent ones. Ideally this should use ScanLastAccessDesc or a time-ordered scan
+	// to target genuinely recent engrams for consolidation. Acceptable for the initial
+	// implementation — the biological analogue replays salient memories too.
 	ids, err := a.store.RecentActive(ctx, ws, limit)
 	if err != nil {
 		return nil, err
