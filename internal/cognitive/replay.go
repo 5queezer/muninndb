@@ -24,6 +24,10 @@ type ReplayStore interface {
 
 // ConsolidationStore provides episode access and summary storage for the
 // hippocampal→neocortical consolidation path during replay.
+//
+// TODO: Return episode ID and member IDs alongside concepts for dedup and
+// RelIsPartOf linking. Current simplified interface is sufficient for the noop
+// default and will be expanded when wiring the real store.
 type ConsolidationStore interface {
 	// GetEpisodeConcepts returns the concepts of engrams in an episode
 	// identified by seedID (the first member's ULID string).
@@ -102,6 +106,10 @@ func NewReplayWorker(config ReplayConfig, activator ReplayActivator, store Repla
 
 // SetConsolidationStore wires a real ConsolidationStore for episode summary
 // generation during replay. Call before Run().
+//
+// Note: EnableConsolidation in ReplayConfig has no effect without calling
+// SetConsolidationStore with a non-nil, non-noop implementation. The default
+// noopConsolidationStore silently discards all consolidation operations.
 func (rw *ReplayWorker) SetConsolidationStore(cs ConsolidationStore) {
 	if cs != nil {
 		rw.consolidationStore = cs
@@ -246,6 +254,11 @@ func (rw *ReplayWorker) replayCycle(ctx context.Context) {
 // consolidateCycle runs the consolidation pass across all vaults, generating
 // summary engrams for episodes that meet the minimum size threshold.
 func (rw *ReplayWorker) consolidateCycle(ctx context.Context, vaults []string) {
+	if _, isNoop := rw.consolidationStore.(noopConsolidationStore); isNoop {
+		slog.Warn("replay: consolidation enabled but no real store wired (call SetConsolidationStore)")
+		return
+	}
+
 	minSize := rw.config.ConsolidationMinSize
 	if minSize <= 0 {
 		minSize = 3
