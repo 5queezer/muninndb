@@ -133,3 +133,47 @@ func (a *separationStoreAdapter) GetEngramEntities(ctx context.Context, ws [8]by
 	})
 	return entities, err
 }
+
+// replayStoreAdapter adapts storage.EngineStore to cognitive.ReplayStore.
+type replayStoreAdapter struct {
+	store storage.EngineStore
+}
+
+// NewReplayStoreAdapter returns a ReplayStore backed by the given EngineStore.
+func NewReplayStoreAdapter(store storage.EngineStore) ReplayStore {
+	return &replayStoreAdapter{store: store}
+}
+
+func (a *replayStoreAdapter) ListVaults(_ context.Context) ([]string, error) {
+	return a.store.ListVaultNames()
+}
+
+func (a *replayStoreAdapter) RecentEngrams(ctx context.Context, vault string, limit int) ([]ReplayEngram, error) {
+	ws := a.store.VaultPrefix(vault)
+	ids, err := a.store.RecentActive(ctx, ws, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	engrams, err := a.store.GetEngrams(ctx, ws, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]ReplayEngram, 0, len(engrams))
+	for _, eg := range engrams {
+		if eg == nil {
+			continue
+		}
+		result = append(result, ReplayEngram{
+			ID:      [16]byte(eg.ID),
+			Concept: eg.Concept,
+			Content: eg.Content,
+			Vault:   vault,
+		})
+	}
+	return result, nil
+}

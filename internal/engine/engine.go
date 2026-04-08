@@ -127,6 +127,8 @@ type Engine struct {
 	pruneDone            chan struct{}             // signals prune worker shutdown
 	idempotencySweepDone chan struct{}             // signals idempotency sweep worker shutdown
 	archiveGCDone        chan struct{}             // signals archive GC worker shutdown
+	replayWorker         *cognitive.ReplayWorker  // nil → no hippocampal replay
+	replayWorkerDone     chan struct{}             // signals replay worker shutdown
 	coherence            *coherence.Registry       // per-vault incremental coherence counters
 	scoring              *scoring.Store            // per-vault learnable scoring weights
 	prov                 *provenance.Store         // audit trail per-engram
@@ -427,6 +429,17 @@ func NewEngine(cfg EngineConfig) *Engine {
 	// engine:spawn-ok — tracked by archiveGCDone channel, drained in Stop()
 	go e.runArchiveGCWorker()
 
+	// Start hippocampal replay worker if configured.
+	if cfg.ReplayWorker != nil {
+		e.replayWorker = cfg.ReplayWorker
+		e.replayWorkerDone = make(chan struct{})
+		// engine:spawn-ok — tracked by replayWorkerDone channel, drained in Stop()
+		go func() {
+			defer close(e.replayWorkerDone)
+			e.replayWorker.Run(e.stopCtx)
+		}()
+	}
+
 	return e
 }
 
@@ -573,6 +586,17 @@ func (e *Engine) Stop() {
 			case <-e.archiveGCDone:
 			case <-time.After(5 * time.Second):
 				slog.Warn("engine: archive GC worker did not exit within 5s")
+			}
+		}
+		// Wait for hippocampal replay worker to exit.
+		if e.replayWorker != nil {
+			e.replayWorker.Stop()
+			if e.replayWorkerDone != nil {
+				select {
+				case <-e.replayWorkerDone:
+				case <-time.After(5 * time.Second):
+					slog.Warn("engine: replay worker did not exit within 5s")
+				}
 			}
 		}
 
@@ -1733,6 +1757,19 @@ func (e *Engine) Read(ctx context.Context, req *mbp.ReadRequest) (*mbp.ReadRespo
 // Activate implements mbp.EngineAPI.Activate.
 func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.ActivateResponse, error) {
 	return e.activateCore(ctx, req, nil)
+}
+
+// SyntheticActivate runs a synthetic activation through the normal ACTIVATE
+// pipeline. Used by the hippocampal replay worker to trigger Hebbian learning,
+// PAS transitions, and contradiction detection without external input.
+func (e *Engine) SyntheticActivate(ctx context.Context, vault string, queryContext string) error {
+	req := &mbp.ActivateRequest{
+		Context:    []string{queryContext},
+		Vault:      vault,
+		MaxResults: 10,
+	}
+	_, err := e.Activate(ctx, req)
+	return err
 }
 
 // ActivateWithStructuredFilter is like Activate but accepts a typed filter for
