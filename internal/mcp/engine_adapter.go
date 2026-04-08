@@ -616,6 +616,63 @@ func (a *mcpEngineAdapter) DetectLoci(ctx context.Context, vault string, minEdge
 	return result, nil
 }
 
+func (a *mcpEngineAdapter) ListEpisodes(ctx context.Context, vault string, limit int) ([]EpisodeResult, error) {
+	episodes, err := a.eng.ListEpisodes(ctx, vault, limit)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]EpisodeResult, len(episodes))
+	for i, ep := range episodes {
+		results[i] = EpisodeResult{
+			ID:        ep.ID,
+			StartTime: ep.StartTime.UTC().Format(time.RFC3339),
+			EndTime:   ep.EndTime.UTC().Format(time.RFC3339),
+			Size:      ep.Size,
+			Members:   ep.Members,
+		}
+	}
+	return results, nil
+}
+
+func (a *mcpEngineAdapter) GetEpisodeMembers(ctx context.Context, vault, episodeID string) ([]EpisodeMember, error) {
+	// List all episodes and find the one matching episodeID.
+	episodes, err := a.eng.ListEpisodes(ctx, vault, 100)
+	if err != nil {
+		return nil, err
+	}
+	var memberIDs []string
+	for _, ep := range episodes {
+		if ep.ID == episodeID {
+			memberIDs = ep.Members
+			break
+		}
+	}
+	if memberIDs == nil {
+		return nil, fmt.Errorf("episode not found: %s", episodeID)
+	}
+
+	// Fetch each engram via the engine's public GetEngram method.
+	members := make([]EpisodeMember, 0, len(memberIDs))
+	for _, idStr := range memberIDs {
+		id, err := storage.ParseULID(idStr)
+		if err != nil {
+			continue
+		}
+		eng, err := a.eng.GetEngram(ctx, vault, id)
+		if err != nil || eng == nil {
+			continue
+		}
+		members = append(members, EpisodeMember{
+			ID:        eng.ID.String(),
+			Concept:   eng.Concept,
+			Summary:   eng.Summary,
+			State:     lifecycleStateLabel(eng.State),
+			CreatedAt: eng.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return members, nil
+}
+
 func (a *mcpEngineAdapter) DetectLocusMembers(ctx context.Context, vault, locusLabel string, minEdgeWeight int) (*LocusMembersResult, error) {
 	loci, err := a.eng.DetectLoci(ctx, vault, minEdgeWeight)
 	if err != nil {
