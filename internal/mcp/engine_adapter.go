@@ -635,31 +635,29 @@ func (a *mcpEngineAdapter) ListEpisodes(ctx context.Context, vault string, limit
 }
 
 func (a *mcpEngineAdapter) GetEpisodeMembers(ctx context.Context, vault, episodeID string) ([]EpisodeMember, error) {
-	// List all episodes and find the one matching episodeID.
-	episodes, err := a.eng.ListEpisodes(ctx, vault, 100)
+	// Direct BFS lookup: walk same_episode edges from the episode's first engram.
+	// This avoids the recency limit imposed by ListEpisodes.
+	startID, err := storage.ParseULID(episodeID)
+	if err != nil {
+		return nil, fmt.Errorf("episode member %q: %w", episodeID, err)
+	}
+	episode, err := a.eng.GetEpisodeByMember(ctx, vault, startID)
 	if err != nil {
 		return nil, err
 	}
-	var memberIDs []string
-	for _, ep := range episodes {
-		if ep.ID == episodeID {
-			memberIDs = ep.Members
-			break
-		}
-	}
-	if memberIDs == nil {
-		return nil, fmt.Errorf("episode not found: %s", episodeID)
-	}
 
 	// Fetch each engram via the engine's public GetEngram method.
-	members := make([]EpisodeMember, 0, len(memberIDs))
-	for _, idStr := range memberIDs {
+	members := make([]EpisodeMember, 0, len(episode.Members))
+	for _, idStr := range episode.Members {
 		id, err := storage.ParseULID(idStr)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("episode member %q: %w", idStr, err)
 		}
 		eng, err := a.eng.GetEngram(ctx, vault, id)
-		if err != nil || eng == nil {
+		if err != nil {
+			return nil, fmt.Errorf("episode member %q: %w", idStr, err)
+		}
+		if eng == nil {
 			continue
 		}
 		members = append(members, EpisodeMember{

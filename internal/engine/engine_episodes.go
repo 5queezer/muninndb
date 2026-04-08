@@ -22,6 +22,11 @@ type Episode struct {
 // It scans all forward associations in the vault, filters for RelSameEpisode,
 // builds connected components via union-find, and returns episodes sorted by
 // StartTime descending, limited to `limit`.
+//
+// Note: singleton episodes (single engrams with no same_episode associations)
+// are not included because they have no edges to discover. This is by design —
+// the EpisodeWorker only creates same_episode links between consecutive engrams
+// within an episode. A singleton means a boundary was detected immediately.
 func (e *Engine) ListEpisodes(ctx context.Context, vault string, limit int) ([]Episode, error) {
 	if limit <= 0 {
 		limit = 10
@@ -126,4 +131,76 @@ func (e *Engine) ListEpisodes(ctx context.Context, vault string, limit int) ([]E
 		episodes = episodes[:limit]
 	}
 	return episodes, nil
+}
+
+// GetEpisodeByMember walks same_episode associations from the given engram via BFS
+// and returns the connected episode. This avoids the limit imposed by ListEpisodes,
+// making it suitable for direct lookups by episode ID (the first engram's ULID).
+func (e *Engine) GetEpisodeByMember(ctx context.Context, vault string, engramID storage.ULID) (*Episode, error) {
+	ws := e.store.ResolveVaultPrefix(vault)
+
+	// BFS: collect all engram IDs connected via same_episode edges.
+	visited := map[storage.ULID]struct{}{engramID: {}}
+	queue := []storage.ULID{engramID}
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+
+		assocs, err := e.store.GetAssociations(ctx, ws, []storage.ULID{cur}, 0)
+		if err != nil {
+			return nil, fmt.Errorf("get episode by member: associations for %s: %w", cur, err)
+		}
+		for _, a := range assocs[cur] {
+			if a.RelType != storage.RelSameEpisode {
+				continue
+			}
+			if _, seen := visited[a.TargetID]; !seen {
+				visited[a.TargetID] = struct{}{}
+				queue = append(queue, a.TargetID)
+			}
+		}
+	}
+
+	if len(visited) == 0 {
+		return nil, fmt.Errorf("get episode by member: no episode found for %s", engramID)
+	}
+
+	// Collect IDs and fetch engrams.
+	ids := make([]storage.ULID, 0, len(visited))
+	for id := range visited {
+		ids = append(ids, id)
+	}
+	engrams, err := e.store.GetEngrams(ctx, ws, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get episode by member: fetch engrams: %w", err)
+	}
+
+	var earliest, latest time.Time
+	var memberIDs []string
+	for _, eng := range engrams {
+		if eng == nil || eng.State == storage.StateSoftDeleted {
+			continue
+		}
+		memberIDs = append(memberIDs, eng.ID.String())
+		if earliest.IsZero() || eng.CreatedAt.Before(earliest) {
+			earliest = eng.CreatedAt
+		}
+		if latest.IsZero() || eng.CreatedAt.After(latest) {
+			latest = eng.CreatedAt
+		}
+	}
+	if len(memberIDs) == 0 {
+		return nil, fmt.Errorf("get episode by member: all members deleted for %s", engramID)
+	}
+
+	sort.Strings(memberIDs)
+
+	return &Episode{
+		ID:        memberIDs[0],
+		StartTime: earliest,
+		EndTime:   latest,
+		Size:      len(memberIDs),
+		Members:   memberIDs,
+	}, nil
 }
