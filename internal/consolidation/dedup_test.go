@@ -369,11 +369,11 @@ func TestDedup_RepresentativeElection(t *testing.T) {
 	embed := []float32{0.5, 0.5, 0}
 
 	lowID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
-		Concept: "low", Content: "low", Confidence: 0.3, Relevance: 0.2,
+		Concept: "low", Content: "same content", Confidence: 0.3, Relevance: 0.2,
 		Stability: 30, Embedding: embed,
 	})
 	highID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
-		Concept: "high", Content: "high", Confidence: 1.0, Relevance: 1.0,
+		Concept: "high", Content: "same content", Confidence: 1.0, Relevance: 1.0,
 		Stability: 30, Embedding: embed,
 	})
 
@@ -438,15 +438,15 @@ func TestDedup_ThreeWayCluster(t *testing.T) {
 	embed := []float32{0, 0, 0, 1}
 
 	writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
-		Concept: "a", Content: "first", Confidence: 0.5, Relevance: 0.5,
+		Concept: "a", Content: "same content", Confidence: 0.5, Relevance: 0.5,
 		Stability: 30, Embedding: embed, Tags: []string{"t1"},
 	})
 	id2 := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
-		Concept: "b", Content: "second", Confidence: 0.8, Relevance: 0.8,
+		Concept: "b", Content: "same content", Confidence: 0.8, Relevance: 0.8,
 		Stability: 30, Embedding: embed, Tags: []string{"t2"},
 	})
 	writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
-		Concept: "c", Content: "third", Confidence: 0.3, Relevance: 0.3,
+		Concept: "c", Content: "same content", Confidence: 0.3, Relevance: 0.3,
 		Stability: 30, Embedding: embed, Tags: []string{"t3"},
 	})
 
@@ -723,5 +723,227 @@ func TestDedup_V2Embeddings_MergesCluster(t *testing.T) {
 	}
 	if archived.State != storage.StateArchived {
 		t.Errorf("duplicate engram state = %v, want archived", archived.State)
+	}
+}
+
+func TestHasDistinctValues(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{
+			name: "colour purple vs cyan",
+			a:    "my favourite colour is purple",
+			b:    "my favourite colour is cyan",
+			want: true,
+		},
+		{
+			name: "city Berlin vs Tokyo",
+			a:    "I live in Berlin",
+			b:    "I live in Tokyo",
+			want: true,
+		},
+		{
+			name: "identical strings",
+			a:    "the quick brown fox",
+			b:    "the quick brown fox",
+			want: false,
+		},
+		{
+			name: "number 3 vs 7",
+			a:    "I have 3 cats",
+			b:    "I have 7 cats",
+			want: false, // single digits are ≤2 chars, filtered out
+		},
+		{
+			name: "number 42 vs 17",
+			a:    "the answer is 42",
+			b:    "the answer is 17",
+			want: false, // two-digit numbers are ≤2 chars, filtered out
+		},
+		{
+			name: "number 100 vs 200",
+			a:    "the price is 100",
+			b:    "the price is 200",
+			want: true, // three-digit numbers have length > 2
+		},
+		{
+			name: "identical with trailing space",
+			a:    "Remember to buy milk ",
+			b:    "Remember to buy milk",
+			want: false,
+		},
+		{
+			name: "identical with different punctuation",
+			a:    "Remember to buy milk!",
+			b:    "Remember to buy milk.",
+			want: false,
+		},
+		{
+			name: "case insensitive identical",
+			a:    "Hello World",
+			b:    "hello world",
+			want: false,
+		},
+		{
+			name: "different verbs",
+			a:    "I love running in the park",
+			b:    "I love swimming in the park",
+			want: true,
+		},
+		{
+			name: "only stopword differences",
+			a:    "it is a cat",
+			b:    "the cat",
+			want: false,
+		},
+		{
+			name: "name difference",
+			a:    "my name is Alice",
+			b:    "my name is Bob",
+			want: true,
+		},
+		{
+			name: "both empty",
+			a:    "",
+			b:    "",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasDistinctValues(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("hasDistinctValues(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDedup_SkipsMergeForDistinctValues(t *testing.T) {
+	store, db, cleanup := testStoreWithDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	vault := "dedup_distinct"
+	wsPrefix := store.ResolveVaultPrefix(vault)
+
+	// Two engrams with identical embeddings but different content values.
+	// This simulates the "purple vs cyan" problem.
+	embed := []float32{1, 0, 0, 0}
+
+	purpleID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "colour", Content: "my favourite colour is purple",
+		Confidence: 0.9, Relevance: 0.9, Stability: 30,
+		Embedding: embed,
+	})
+	cyanID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "colour", Content: "my favourite colour is cyan",
+		Confidence: 0.5, Relevance: 0.5, Stability: 30,
+		Embedding: embed,
+	})
+
+	mock := &mockEngineInterface{store: store}
+	w := &Worker{Engine: mock, MaxDedup: 100, MaxTransitive: 100}
+	report := &ConsolidationReport{}
+
+	if err := w.runPhase2Dedup(ctx, store, wsPrefix, report, vault); err != nil {
+		t.Fatal(err)
+	}
+
+	// The cluster should form (identical embeddings) but no merge should happen.
+	if report.DedupClusters != 1 {
+		t.Errorf("DedupClusters = %d, want 1", report.DedupClusters)
+	}
+	if report.MergedEngrams != 0 {
+		t.Errorf("MergedEngrams = %d, want 0 (distinct values should prevent merge)", report.MergedEngrams)
+	}
+	if report.SkippedDedupValues != 1 {
+		t.Errorf("SkippedDedupValues = %d, want 1", report.SkippedDedupValues)
+	}
+
+	// Both engrams should remain active (not archived).
+	purple, err := store.GetEngram(ctx, wsPrefix, purpleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purple.State == storage.StateArchived {
+		t.Error("purple engram should NOT be archived (distinct value)")
+	}
+
+	cyan, err := store.GetEngram(ctx, wsPrefix, cyanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cyan.State == storage.StateArchived {
+		t.Error("cyan engram should NOT be archived (distinct value)")
+	}
+}
+
+func TestDedup_MixedCluster_MergesIdenticalSkipsDistinct(t *testing.T) {
+	store, db, cleanup := testStoreWithDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	vault := "dedup_mixed"
+	wsPrefix := store.ResolveVaultPrefix(vault)
+
+	embed := []float32{1, 0, 0, 0}
+
+	// Representative: highest score
+	repID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "colour", Content: "my favourite colour is purple",
+		Confidence: 0.9, Relevance: 0.9, Stability: 30,
+		Embedding: embed,
+	})
+	// Duplicate of representative (same content) — should be merged
+	dupeID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "colour", Content: "my favourite colour is purple",
+		Confidence: 0.3, Relevance: 0.3, Stability: 30,
+		Embedding: embed,
+	})
+	// Different value — should be skipped
+	cyanID := writeEngramWithEmbedding(t, ctx, store, db, wsPrefix, &storage.Engram{
+		Concept: "colour", Content: "my favourite colour is cyan",
+		Confidence: 0.4, Relevance: 0.4, Stability: 30,
+		Embedding: embed,
+	})
+
+	mock := &mockEngineInterface{store: store}
+	w := &Worker{Engine: mock, MaxDedup: 100, MaxTransitive: 100}
+	report := &ConsolidationReport{}
+
+	if err := w.runPhase2Dedup(ctx, store, wsPrefix, report, vault); err != nil {
+		t.Fatal(err)
+	}
+
+	if report.DedupClusters != 1 {
+		t.Errorf("DedupClusters = %d, want 1", report.DedupClusters)
+	}
+	if report.MergedEngrams != 1 {
+		t.Errorf("MergedEngrams = %d, want 1 (only the identical dupe)", report.MergedEngrams)
+	}
+	if report.SkippedDedupValues != 1 {
+		t.Errorf("SkippedDedupValues = %d, want 1", report.SkippedDedupValues)
+	}
+
+	// Representative stays active
+	rep, _ := store.GetEngram(ctx, wsPrefix, repID)
+	if rep.State == storage.StateArchived {
+		t.Error("representative should not be archived")
+	}
+
+	// Identical dupe gets archived
+	dupe, _ := store.GetEngram(ctx, wsPrefix, dupeID)
+	if dupe.State != storage.StateArchived {
+		t.Errorf("identical dupe state = %v, want archived", dupe.State)
+	}
+
+	// Distinct-value engram stays active
+	cyan, _ := store.GetEngram(ctx, wsPrefix, cyanID)
+	if cyan.State == storage.StateArchived {
+		t.Error("distinct-value engram should NOT be archived")
 	}
 }

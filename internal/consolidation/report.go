@@ -8,7 +8,8 @@ type ConsolidationReport struct {
 	StartedAt      time.Time     // when consolidation started
 	Duration       time.Duration // wall-clock time elapsed
 	DedupClusters  int           // number of deduplication clusters formed
-	MergedEngrams  int           // total engrams merged via deduplication
+	MergedEngrams      int           // total engrams merged via deduplication
+	SkippedDedupValues int           // merges skipped due to distinct value tokens
 	PromotedNodes  int           // engrams promoted to schema nodes
 	DecayedEngrams int           // engrams aged and decayed
 	InferredEdges  int           // new transitive associations inferred

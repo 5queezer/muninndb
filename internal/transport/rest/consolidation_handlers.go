@@ -20,7 +20,8 @@ type consolidationResponse struct {
 	StartedAt      time.Time     `json:"started_at"`
 	Duration       string        `json:"duration"`
 	DedupClusters  int           `json:"dedup_clusters"`
-	MergedEngrams  int           `json:"merged_engrams"`
+	MergedEngrams      int           `json:"merged_engrams"`
+	SkippedDedupValues int           `json:"skipped_dedup_values"`
 	PromotedNodes  int           `json:"promoted_nodes"`
 	DecayedEngrams int           `json:"decayed_engrams"`
 	InferredEdges  int           `json:"inferred_edges"`
@@ -63,7 +64,8 @@ func (s *Server) handleConsolidate() http.HandlerFunc {
 			StartedAt:      report.StartedAt,
 			Duration:       report.Duration.String(),
 			DedupClusters:  report.DedupClusters,
-			MergedEngrams:  report.MergedEngrams,
+			MergedEngrams:      report.MergedEngrams,
+			SkippedDedupValues: report.SkippedDedupValues,
 			PromotedNodes:  report.PromotedNodes,
 			DecayedEngrams: report.DecayedEngrams,
 			InferredEdges:  report.InferredEdges,

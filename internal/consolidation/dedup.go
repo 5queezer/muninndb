@@ -4,10 +4,78 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/scrypster/muninndb/internal/storage"
 )
+
+// stopwords is a minimal set of common English words that carry no
+// discriminating value. Used by hasDistinctValues to ignore structural
+// tokens when comparing engram content.
+var stopwords = map[string]bool{
+	"a": true, "an": true, "the": true, "is": true, "are": true,
+	"was": true, "were": true, "be": true, "been": true, "being": true,
+	"have": true, "has": true, "had": true, "do": true, "does": true,
+	"did": true, "will": true, "would": true, "could": true, "should": true,
+	"may": true, "might": true, "shall": true, "can": true,
+	"and": true, "but": true, "or": true, "nor": true, "not": true,
+	"so": true, "yet": true, "for": true, "to": true, "of": true,
+	"in": true, "on": true, "at": true, "by": true, "with": true,
+	"from": true, "as": true, "into": true, "about": true, "that": true,
+	"this": true, "it": true, "its": true, "my": true, "your": true,
+	"his": true, "her": true, "our": true, "their": true,
+	"i": true, "me": true, "we": true, "us": true, "you": true,
+	"he": true, "she": true, "they": true, "them": true,
+}
+
+// tokenize lowercases and splits a string into word tokens, treating any
+// non-letter, non-digit character as a separator.
+func tokenize(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
+// hasDistinctValues returns true if two strings share structure but differ in
+// at least one meaningful (non-stopword, length > 2) token. This detects cases
+// like "my favourite colour is purple" vs "my favourite colour is cyan" where
+// sentence embeddings score high similarity despite conveying different facts.
+func hasDistinctValues(a, b string) bool {
+	tokensA := tokenize(a)
+	tokensB := tokenize(b)
+
+	setA := make(map[string]bool, len(tokensA))
+	for _, t := range tokensA {
+		setA[t] = true
+	}
+	setB := make(map[string]bool, len(tokensB))
+	for _, t := range tokensB {
+		setB[t] = true
+	}
+
+	// Compute symmetric difference: tokens in one set but not the other.
+	var diff []string
+	for t := range setA {
+		if !setB[t] {
+			diff = append(diff, t)
+		}
+	}
+	for t := range setB {
+		if !setA[t] {
+			diff = append(diff, t)
+		}
+	}
+
+	// Filter out stopwords and very short tokens (≤2 chars).
+	for _, t := range diff {
+		if len(t) > 2 && !stopwords[t] {
+			return true
+		}
+	}
+	return false
+}
 
 // runPhase2Dedup scans all engrams with embeddings and merges semantically similar ones
 // (cosine similarity >= 0.95). The higher-confidence engram is kept as the representative,
@@ -143,9 +211,19 @@ func (w *Worker) runPhase2Dedup(ctx context.Context, store *storage.PebbleStore,
 			mergedTags = append(mergedTags, tag)
 		}
 
-		// Archive non-representative members
+		// Archive non-representative members, but skip those whose content
+		// differs in discriminating value tokens (e.g. "purple" vs "cyan").
+		// Skipped members are left untouched for future LLM adjudication.
 		for _, member := range clust.members {
 			if member.ID == representative.ID {
+				continue
+			}
+
+			if hasDistinctValues(representative.Content, member.Content) {
+				slog.Debug("consolidation phase 2: skipping merge (distinct values)",
+					"representative", representative.ID, "member", member.ID,
+					"rep_content", representative.Content, "member_content", member.Content)
+				report.SkippedDedupValues++
 				continue
 			}
 
@@ -177,7 +255,7 @@ func (w *Worker) runPhase2Dedup(ctx context.Context, store *storage.PebbleStore,
 		}
 	}
 
-	slog.Debug("consolidation phase 2 (dedup) completed", "clusters", report.DedupClusters, "merged", report.MergedEngrams)
+	slog.Debug("consolidation phase 2 (dedup) completed", "clusters", report.DedupClusters, "merged", report.MergedEngrams, "skipped_distinct", report.SkippedDedupValues)
 	return nil
 }
 
